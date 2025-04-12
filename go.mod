@@ -1,9 +1,12 @@
 module github.com/glimesh/broadcast-box
 
-go 1.19
+go 1.23
+
+toolchain go1.24.1
 
 require (
 	github.com/google/uuid v1.6.0
+	github.com/gorilla/sessions v1.4.0
 	github.com/joho/godotenv v1.5.1
 	github.com/pion/dtls/v3 v3.0.4
 	github.com/pion/ice/v3 v3.0.16
@@ -15,6 +18,7 @@ require (
 )
 
 require (
+	github.com/gorilla/securecookie v1.1.2 // indirect
 	github.com/pion/datachannel v1.5.10 // indirect
 	github.com/pion/dtls/v2 v2.2.12 // indirect
 	github.com/pion/ice/v4 v4.0.7 // indirect

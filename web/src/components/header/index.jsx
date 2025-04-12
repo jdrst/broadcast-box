@@ -1,10 +1,31 @@
-import { useContext } from 'react';
-import { Link, Outlet } from 'react-router-dom'
+import { useContext, useEffect } from 'react';
+import { AuthContext } from '../login'
+import { Link, Outlet, useNavigate } from 'react-router-dom'
 import { CinemaModeContext } from '../player';
+
 
 const Header = () => {
   const { cinemaMode } = useContext(CinemaModeContext);
   const navbarEnabled = !cinemaMode;
+  const navigate = useNavigate();
+  const [{username, authenticated, pending}, login, logout] = useContext(AuthContext);
+  
+  useEffect(() => {
+    if (!authenticated && !pending) {
+      const url = new URL(document.location)
+      const from = url.searchParams.get("redirectUrl") ?? `${url.pathname}${url.search}`
+      navigate(`/login?redirectUrl=${encodeURIComponent(from)}`, { replace: true })
+    }
+  }, [authenticated, pending])
+  
+  const handleLogoutClick = () => {
+    logout().then(resp => {
+      if (resp.ok) {
+        navigate('/')
+      }
+    })
+  }
+  
   return (
     <div>
       {navbarEnabled && (
@@ -14,6 +35,12 @@ const Header = () => {
               <Link to="/" className='font-light leading-tight text-2xl'>
                 Broadcast Box
               </Link>
+              {authenticated &&
+                <>
+                  Hello {username}
+                  <button onClick={handleLogoutClick} className='ml-10 py-2 px-4 bg-blue-500 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 focus:outline-hidden focus:ring-2 focus:ring-blue-400 focus:ring-opacity-75'>Logout</button>
+                </>
+              }
             </div>
           </div>
         </nav>

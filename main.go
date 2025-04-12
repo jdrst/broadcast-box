@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/glimesh/broadcast-box/internal/auth"
 	"github.com/glimesh/broadcast-box/internal/networktest"
 	"github.com/glimesh/broadcast-box/internal/webrtc"
 	"github.com/joho/godotenv"
@@ -167,10 +168,10 @@ func statusHandler(res http.ResponseWriter, req *http.Request) {
 	}
 }
 
-func indexHTMLWhenNotFound(fs http.FileSystem) http.Handler {
+func indexHTMLWhenNotFound(fs http.FileSystem) http.HandlerFunc {
 	fileServer := http.FileServer(fs)
 
-	return http.HandlerFunc(func(resp http.ResponseWriter, req *http.Request) {
+	return func(resp http.ResponseWriter, req *http.Request) {
 		_, err := fs.Open(path.Clean(req.URL.Path)) // Do not allow path traversals.
 		if errors.Is(err, os.ErrNotExist) {
 			http.ServeFile(resp, req, "./web/build/index.html")
@@ -178,7 +179,7 @@ func indexHTMLWhenNotFound(fs http.FileSystem) http.Handler {
 			return
 		}
 		fileServer.ServeHTTP(resp, req)
-	})
+	}
 }
 
 func corsHandler(next func(w http.ResponseWriter, r *http.Request)) http.HandlerFunc {
@@ -196,21 +197,21 @@ func corsHandler(next func(w http.ResponseWriter, r *http.Request)) http.Handler
 
 func main() {
 	loadConfigs := func() error {
-		if os.Getenv("APP_ENV") == "development" {
-			log.Println("Loading `" + envFileDev + "`")
-			return godotenv.Load(envFileDev)
-		} else {
-			log.Println("Loading `" + envFileProd + "`")
-			if err := godotenv.Load(envFileProd); err != nil {
-				return err
-			}
+		// if os.Getenv("APP_ENV") == "development" {
+		log.Println("Loading `" + envFileDev + "`")
+		return godotenv.Load(envFileDev)
+		// } else {
+		// 	log.Println("Loading `" + envFileProd + "`")
+		// 	if err := godotenv.Load(envFileProd); err != nil {
+		// 		return err
+		// 	}
 
-			if _, err := os.Stat("./web/build"); os.IsNotExist(err) && os.Getenv("DISABLE_FRONTEND") == "" {
-				return errNoBuildDirectoryErr
-			}
+		// 	if _, err := os.Stat("./web/build"); os.IsNotExist(err) && os.Getenv("DISABLE_FRONTEND") == "" {
+		// 		return errNoBuildDirectoryErr
+		// 	}
 
-			return nil
-		}
+		// 	return nil
+		// }
 	}
 
 	if err := loadConfigs(); err != nil {
@@ -268,15 +269,18 @@ func main() {
 
 	mux := http.NewServeMux()
 	if os.Getenv("DISABLE_FRONTEND") == "" {
-		mux.Handle("/", indexHTMLWhenNotFound(http.Dir("./web/build")))
+		mux.HandleFunc("/", indexHTMLWhenNotFound(http.Dir("./web/build")))
 	}
-	mux.HandleFunc("/api/whip", corsHandler(whipHandler))
-	mux.HandleFunc("/api/whep", corsHandler(whepHandler))
-	mux.HandleFunc("/api/sse/", corsHandler(whepServerSentEventsHandler))
-	mux.HandleFunc("/api/layer/", corsHandler(whepLayerHandler))
+	mux.HandleFunc("/api/whip", auth.AuthHandler(corsHandler(whipHandler)))
+	mux.HandleFunc("/api/whep", auth.AuthHandler(corsHandler(whepHandler)))
+	mux.HandleFunc("/api/sse/", auth.AuthHandler(corsHandler(whepServerSentEventsHandler)))
+	mux.HandleFunc("/api/layer/", auth.AuthHandler(corsHandler(whepLayerHandler)))
+	mux.HandleFunc("POST /auth/login", corsHandler(auth.LoginHandler))
+	mux.HandleFunc("POST /auth/logout", auth.AuthHandler(corsHandler(auth.LogoutHandler)))
+	mux.HandleFunc("GET /user/info", auth.AuthHandler(corsHandler(auth.UserInfoHandler)))
 
 	if os.Getenv("DISABLE_STATUS") == "" {
-		mux.HandleFunc("/api/status", corsHandler(statusHandler))
+		mux.HandleFunc("/api/status", auth.AuthHandler(corsHandler(statusHandler)))
 	}
 
 	server := &http.Server{
