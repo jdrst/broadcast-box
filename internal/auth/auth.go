@@ -4,8 +4,7 @@ import (
 	"errors"
 	"net/http"
 
-	"os"
-
+	"github.com/glimesh/broadcast-box/internal/db"
 	"github.com/gorilla/sessions"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -14,13 +13,21 @@ const authedValue = "authenticated"
 const sessionName = "broadcast-box"
 const usernameValue = "username"
 
-var store = sessions.NewCookieStore([]byte(os.Getenv("SESSION_KEY")))
-var hash, _ = bcrypt.GenerateFromPassword([]byte(os.Getenv("PASSWORD")), 14)
-var passwordStore = map[string][]byte{os.Getenv("USERNAME"): hash}
+type AuthContext struct {
+	Db    *db.Db
+	store sessions.Store
+}
 
-func AuthHandler(next func(w http.ResponseWriter, r *http.Request)) http.HandlerFunc {
+func NewContext(db *db.Db, sessionKey []byte) AuthContext {
+	return AuthContext{
+		Db:    db,
+		store: sessions.NewCookieStore(sessionKey),
+	}
+}
+
+func (ctx *AuthContext) AuthHandler(next func(w http.ResponseWriter, r *http.Request)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		session, _ := store.Get(r, sessionName)
+		session, _ := ctx.store.Get(r, sessionName)
 		authenticated := session.Values[authedValue]
 
 		if authenticated != nil && authenticated != false {
@@ -33,8 +40,8 @@ func AuthHandler(next func(w http.ResponseWriter, r *http.Request)) http.Handler
 	}
 }
 
-func UserInfoHandler(w http.ResponseWriter, r *http.Request) {
-	session, _ := store.Get(r, sessionName)
+func (ctx *AuthContext) UserInfoHandler(w http.ResponseWriter, r *http.Request) {
+	session, _ := ctx.store.Get(r, sessionName)
 	username := session.Values[usernameValue].(string)
 	_, err := w.Write([]byte(username))
 	if err != nil {
@@ -42,15 +49,17 @@ func UserInfoHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func LoginHandler(w http.ResponseWriter, r *http.Request) {
+func (ctx *AuthContext) LoginHandler(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
 
-	user := r.PostForm.Get("username")
+	username := r.PostForm.Get("username")
 	pwd := r.PostForm.Get("password")
 
-	if verifyPassword(pwd, passwordStore[user]) {
-		setAuthed(user, true, w, r)
-		_, err := w.Write([]byte(user))
+	user := ctx.Db.Users()[username]
+
+	if user.VerifyPassword(pwd) {
+		ctx.setAuthed(username, true, w, r)
+		_, err := w.Write([]byte(username))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
@@ -60,12 +69,12 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, errors.New("Invalid login data.").Error(), http.StatusUnauthorized)
 }
 
-func LogoutHandler(w http.ResponseWriter, r *http.Request) {
-	setAuthed("", false, w, r)
+func (ctx *AuthContext) LogoutHandler(w http.ResponseWriter, r *http.Request) {
+	ctx.setAuthed("", false, w, r)
 }
 
-func setAuthed(username string, isAuthed bool, w http.ResponseWriter, r *http.Request) {
-	session, _ := store.Get(r, sessionName)
+func (ctx *AuthContext) setAuthed(username string, isAuthed bool, w http.ResponseWriter, r *http.Request) {
+	session, _ := ctx.store.Get(r, sessionName)
 	session.Values[authedValue] = isAuthed
 	session.Values[usernameValue] = username
 	err := session.Save(r, w)

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/glimesh/broadcast-box/internal/auth"
+	"github.com/glimesh/broadcast-box/internal/db"
 	"github.com/glimesh/broadcast-box/internal/networktest"
 	"github.com/glimesh/broadcast-box/internal/webrtc"
 	"github.com/joho/godotenv"
@@ -267,20 +268,29 @@ func main() {
 		}()
 	}
 
+	db, err := db.Open("db.json")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	sessionKey := []byte(os.Getenv("SESSION_KEY"))
+	sessionKey = []byte("abcdefghabcdefghabcdefghabcdefgh")
+	authCtx := auth.NewContext(db, sessionKey)
+
 	mux := http.NewServeMux()
 	if os.Getenv("DISABLE_FRONTEND") == "" {
 		mux.HandleFunc("/", indexHTMLWhenNotFound(http.Dir("./web/build")))
 	}
-	mux.HandleFunc("/api/whip", auth.AuthHandler(corsHandler(whipHandler)))
-	mux.HandleFunc("/api/whep", auth.AuthHandler(corsHandler(whepHandler)))
-	mux.HandleFunc("/api/sse/", auth.AuthHandler(corsHandler(whepServerSentEventsHandler)))
-	mux.HandleFunc("/api/layer/", auth.AuthHandler(corsHandler(whepLayerHandler)))
-	mux.HandleFunc("POST /auth/login", corsHandler(auth.LoginHandler))
-	mux.HandleFunc("POST /auth/logout", auth.AuthHandler(corsHandler(auth.LogoutHandler)))
-	mux.HandleFunc("GET /user/info", auth.AuthHandler(corsHandler(auth.UserInfoHandler)))
+	mux.HandleFunc("/api/whip", authCtx.AuthHandler(corsHandler(whipHandler)))
+	mux.HandleFunc("/api/whep", authCtx.AuthHandler(corsHandler(whepHandler)))
+	mux.HandleFunc("/api/sse/", authCtx.AuthHandler(corsHandler(whepServerSentEventsHandler)))
+	mux.HandleFunc("/api/layer/", authCtx.AuthHandler(corsHandler(whepLayerHandler)))
+	mux.HandleFunc("POST /auth/login", corsHandler(authCtx.LoginHandler))
+	mux.HandleFunc("POST /auth/logout", authCtx.AuthHandler(corsHandler(authCtx.LogoutHandler)))
+	mux.HandleFunc("GET /user/info", authCtx.AuthHandler(corsHandler(authCtx.UserInfoHandler)))
 
 	if os.Getenv("DISABLE_STATUS") == "" {
-		mux.HandleFunc("/api/status", auth.AuthHandler(corsHandler(statusHandler)))
+		mux.HandleFunc("/api/status", authCtx.AuthHandler(corsHandler(statusHandler)))
 	}
 
 	server := &http.Server{
