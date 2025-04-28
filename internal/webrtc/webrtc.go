@@ -68,7 +68,12 @@ var (
 	apiWhip, apiWhep *webrtc.API
 
 	// nolint
-	videoRTCPFeedback = []webrtc.RTCPFeedback{{"goog-remb", ""}, {"ccm", "fir"}, {"nack", ""}, {"nack", "pli"}}
+	videoRTCPFeedback = []webrtc.RTCPFeedback{
+		{Type: "goog-remb", Parameter: ""},
+		{Type: "ccm", Parameter: "fir"},
+		{Type: "nack", Parameter: ""},
+		{Type: "nack", Parameter: "pli"},
+	}
 )
 
 func getVideoTrackCodec(in string) videoTrackCodec {
@@ -89,8 +94,8 @@ func getVideoTrackCodec(in string) videoTrackCodec {
 	return 0
 }
 
-func getStream(streamKey string, forWHIP bool) (*stream, error) {
-	foundStream, ok := streamMap[streamKey]
+func getStream(username string, forWHIP bool) (*stream, error) {
+	foundStream, ok := streamMap[username]
 	if !ok {
 		audioTrack, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus}, "audio", "pion")
 		if err != nil {
@@ -107,7 +112,7 @@ func getStream(streamKey string, forWHIP bool) (*stream, error) {
 			whipActiveContextCancel: whipActiveContextCancel,
 			firstSeenEpoch:          uint64(time.Now().Unix()),
 		}
-		streamMap[streamKey] = foundStream
+		streamMap[username] = foundStream
 	}
 
 	if forWHIP {
@@ -298,7 +303,7 @@ func PopulateMediaEngine(m *webrtc.MediaEngine) error {
 	for _, codec := range []webrtc.RTPCodecParameters{
 		{
 			// nolint
-			RTPCodecCapability: webrtc.RTPCodecCapability{webrtc.MimeTypeOpus, 48000, 2, "minptime=10;useinbandfec=1", nil},
+			RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2, SDPFmtpLine: "minptime=10;useinbandfec=1", RTCPFeedback: nil},
 			PayloadType:        111,
 		},
 	} {

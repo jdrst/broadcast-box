@@ -1,7 +1,10 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
+	"database/sql"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,12 +14,14 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"strings"
+
 	"time"
 
+	_ "modernc.org/sqlite"
+
 	"github.com/glimesh/broadcast-box/internal/auth"
-	"github.com/glimesh/broadcast-box/internal/db"
+	"github.com/glimesh/broadcast-box/internal/database"
 	"github.com/glimesh/broadcast-box/internal/networktest"
 	"github.com/glimesh/broadcast-box/internal/webrtc"
 	"github.com/joho/godotenv"
@@ -33,6 +38,9 @@ const (
 
 var errNoBuildDirectoryErr = errors.New("\033[0;31mBuild directory does not exist, run `npm install` and `npm run build` in the web directory.\033[0m")
 
+//go:embed internal/database/schema.sql
+var ddl string
+
 type (
 	whepLayerRequestJSON struct {
 		MediaId    string `json:"mediaId"`
@@ -45,8 +53,9 @@ func logHTTPError(w http.ResponseWriter, err string, code int) {
 	http.Error(w, err, code)
 }
 
-func validateStreamKey(streamKey string) bool {
-	return regexp.MustCompile(`^[a-zA-Z0-9_\-\.~]+$`).MatchString(streamKey)
+func validateStreamKey(ctx context.Context, queries *database.Queries, username, streamKey string) bool {
+	u, _ := auth.GetUser(ctx, queries, username)
+	return u.VerifyStreamKey(streamKey)
 }
 
 func extractBearerToken(authHeader string) (string, bool) {
@@ -57,20 +66,32 @@ func extractBearerToken(authHeader string) (string, bool) {
 	return "", false
 }
 
-func whipHandler(res http.ResponseWriter, r *http.Request) {
+type WhipContext struct {
+	queries *database.Queries
+}
+
+func (ctx *WhipContext) whipHandler(res http.ResponseWriter, r *http.Request) {
+	username := r.PathValue("username")
 	if r.Method == "DELETE" {
 		return
 	}
 
 	streamKeyHeader := r.Header.Get("Authorization")
 	if streamKeyHeader == "" {
-		logHTTPError(res, "Authorization was not set", http.StatusBadRequest)
+		logHTTPError(res, "Authorization was not set", http.StatusUnauthorized)
 		return
 	}
 
 	streamKey, ok := extractBearerToken(streamKeyHeader)
-	if !ok || !validateStreamKey(streamKey) {
-		logHTTPError(res, "Invalid stream key format", http.StatusBadRequest)
+
+	if !ok {
+		logHTTPError(res, "Authorization header was empty", http.StatusUnauthorized)
+		return
+	}
+
+	ok = validateStreamKey(r.Context(), ctx.queries, username, streamKey)
+	if !ok {
+		logHTTPError(res, "Invalid streamkey", http.StatusUnauthorized)
 		return
 	}
 
@@ -80,7 +101,7 @@ func whipHandler(res http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	answer, err := webrtc.WHIP(string(offer), streamKey)
+	answer, err := webrtc.WHIP(string(offer), username)
 	if err != nil {
 		logHTTPError(res, err.Error(), http.StatusBadRequest)
 		return
@@ -93,17 +114,13 @@ func whipHandler(res http.ResponseWriter, r *http.Request) {
 }
 
 func whepHandler(res http.ResponseWriter, req *http.Request) {
-	streamKeyHeader := req.Header.Get("Authorization")
-	if streamKeyHeader == "" {
-		logHTTPError(res, "Authorization was not set", http.StatusBadRequest)
+	username := req.PathValue("username")
+	if username == "" {
+		logHTTPError(res, "Stream does not exist", http.StatusBadRequest)
 		return
 	}
 
-	streamKey, ok := extractBearerToken(streamKeyHeader)
-	if !ok || !validateStreamKey(streamKey) {
-		logHTTPError(res, "Invalid stream key format", http.StatusBadRequest)
-		return
-	}
+	//TODO: check if user exists
 
 	offer, err := io.ReadAll(req.Body)
 	if err != nil {
@@ -111,16 +128,16 @@ func whepHandler(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	answer, whepSessionId, err := webrtc.WHEP(string(offer), streamKey)
+	answer, whepSessionId, err := webrtc.WHEP(string(offer), username)
 	if err != nil {
 		logHTTPError(res, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	apiPath := req.Host + strings.TrimSuffix(req.URL.RequestURI(), "whep")
+	apiPath := req.Host + strings.TrimSuffix(req.URL.RequestURI(), "whep/"+username+"/")
 	res.Header().Add("Link", `<`+apiPath+"sse/"+whepSessionId+`>; rel="urn:ietf:params:whep:ext:core:server-sent-events"; events="layers"`)
 	res.Header().Add("Link", `<`+apiPath+"layer/"+whepSessionId+`>; rel="urn:ietf:params:whep:ext:core:layer"`)
-	res.Header().Add("Location", "/api/whep")
+	res.Header().Add("Location", "/api/whep/"+username+"/")
 	res.Header().Add("Content-Type", "application/sdp")
 	res.WriteHeader(http.StatusCreated)
 	fmt.Fprint(res, answer)
@@ -198,21 +215,21 @@ func corsHandler(next func(w http.ResponseWriter, r *http.Request)) http.Handler
 
 func main() {
 	loadConfigs := func() error {
-		// if os.Getenv("APP_ENV") == "development" {
-		log.Println("Loading `" + envFileDev + "`")
-		return godotenv.Load(envFileDev)
-		// } else {
-		// 	log.Println("Loading `" + envFileProd + "`")
-		// 	if err := godotenv.Load(envFileProd); err != nil {
-		// 		return err
-		// 	}
+		if os.Getenv("APP_ENV") == "development" {
+			log.Println("Loading `" + envFileDev + "`")
+			return godotenv.Load(envFileDev)
+		} else {
+			log.Println("Loading `" + envFileProd + "`")
+			if err := godotenv.Load(envFileProd); err != nil {
+				return err
+			}
 
-		// 	if _, err := os.Stat("./web/build"); os.IsNotExist(err) && os.Getenv("DISABLE_FRONTEND") == "" {
-		// 		return errNoBuildDirectoryErr
-		// 	}
+			if _, err := os.Stat("./web/build"); os.IsNotExist(err) && os.Getenv("DISABLE_FRONTEND") == "" {
+				return errNoBuildDirectoryErr
+			}
 
-		// 	return nil
-		// }
+			return nil
+		}
 	}
 
 	if err := loadConfigs(); err != nil {
@@ -268,21 +285,44 @@ func main() {
 		}()
 	}
 
-	db, err := db.Open("db.json")
+	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		log.Fatal(err)
 	}
 
+	ctx := context.Background()
+
+	// create tables
+	if _, err := db.ExecContext(ctx, ddl); err != nil {
+		log.Fatal(err)
+	}
+	database := database.New(db)
+	users, err := database.ListUsers(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if len(users) == 0 {
+		_, err := auth.NewUser(ctx, database, "admin", "admin", "admin123")
+		if err != nil {
+			log.Fatal(err)
+		}
+		_, err = auth.NewUser(ctx, database, "lol", "rofl", "lol123")
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+
 	sessionKey := []byte(os.Getenv("SESSION_KEY"))
-	sessionKey = []byte("abcdefghabcdefghabcdefghabcdefgh")
-	authCtx := auth.NewContext(db, sessionKey)
+	sessionKey = []byte("abcdefghabcdefghabcdefghabcdefgh") //TODO
+	authCtx := auth.NewContext(database, sessionKey)
+	whipCtx := WhipContext{queries: database}
 
 	mux := http.NewServeMux()
 	if os.Getenv("DISABLE_FRONTEND") == "" {
 		mux.HandleFunc("/", indexHTMLWhenNotFound(http.Dir("./web/build")))
 	}
-	mux.HandleFunc("/api/whip", authCtx.AuthHandler(corsHandler(whipHandler)))
-	mux.HandleFunc("/api/whep", authCtx.AuthHandler(corsHandler(whepHandler)))
+	mux.HandleFunc("/api/whip/{username}/", corsHandler(whipCtx.whipHandler))
+	mux.HandleFunc("/api/whep/{username}/", authCtx.AuthHandler(corsHandler(whepHandler)))
 	mux.HandleFunc("/api/sse/", authCtx.AuthHandler(corsHandler(whepServerSentEventsHandler)))
 	mux.HandleFunc("/api/layer/", authCtx.AuthHandler(corsHandler(whepLayerHandler)))
 	mux.HandleFunc("POST /auth/login", corsHandler(authCtx.LoginHandler))

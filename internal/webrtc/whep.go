@@ -73,12 +73,12 @@ func WHEPChangeLayer(whepSessionId, layer string) error {
 	return nil
 }
 
-func WHEP(offer, streamKey string) (string, string, error) {
+func WHEP(offer, username string) (string, string, error) {
 	maybePrintOfferAnswer(offer, true)
 
 	streamMapLock.Lock()
 	defer streamMapLock.Unlock()
-	stream, err := getStream(streamKey, false)
+	stream, err := getStream(username, false)
 	if err != nil {
 		return "", "", err
 	}
@@ -98,7 +98,7 @@ func WHEP(offer, streamKey string) (string, string, error) {
 				log.Println(err)
 			}
 
-			peerConnectionDisconnected(streamKey, whepSessionId)
+			peerConnectionDisconnected(username, whepSessionId)
 		}
 	})
 

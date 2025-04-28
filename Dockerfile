@@ -7,6 +7,8 @@ FROM golang:alpine AS go-build
 WORKDIR /broadcast-box
 ENV GOPROXY=direct
 ENV GOSUMDB=off
+COPY go.mod go.sum /broadcast-box
+RUN go mod download
 COPY . /broadcast-box
 RUN apk add git
 RUN go build

@@ -91,14 +91,14 @@ function Player({ cinemaMode, peerConnectionDisconnected, setPeerConnectionDisco
       return import.meta.env.REACT_APP_API_PATH;
       })();
 
-      fetch(`${apiPath}/whep`, {
+      fetch(`${apiPath}/whep/${location.pathname.split('/').pop()}/`, {
         method: 'POST',
         body: offer.sdp,
         headers: {
-          Authorization: `Bearer ${location.pathname.split('/').pop()}`,
           'Content-Type': 'application/sdp'
         }
       }).then(r => {
+        console.log(`fetched: ${apiPath}/whep/${location.pathname.split('/').pop()}`)
         const parsedLinkHeader = parseLinkHeader(r.headers.get('Link'))
         setLayerEndpoint(`${window.location.protocol}//${parsedLinkHeader['urn:ietf:params:whep:ext:core:layer'].url}`)
 
